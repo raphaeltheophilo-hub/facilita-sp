@@ -1,9 +1,6 @@
 """
-app.py — Facilita SP (MVP 1 + MVP 2)
+app.py — Facilita SP (MVP 1 + MVP 2 + Prazos)
 Diretoria de Aumento da Produtividade · SDE-SP
-
-MVP 1: PDF lazy, abas no Histórico, botão Novo contato visível, edição inline de interlocutores
-MVP 2: Filtros unificados mapa+tabela, busca global, ações rápidas na ficha, menu agrupado
 """
 import os
 from datetime import date
@@ -43,6 +40,75 @@ def _notas_html(texto: str):
             word-break:break-word">{escaped}</div>""",
         unsafe_allow_html=True,
     )
+
+# ── Helper: classifica urgência do prazo ─────────────────────────────────────
+def _urgencia(dias):
+    """Retorna (label, cor_borda, cor_fundo, cor_texto) conforme dias restantes."""
+    d = int(dias) if dias is not None else 0
+    if d < 0:
+        return "VENCIDO",      "#A32D2D", "#FCEBEB", "#7C1F1F"
+    if d == 0:
+        return "VENCE HOJE",   "#A32D2D", "#FCEBEB", "#7C1F1F"
+    if d <= 7:
+        return f"{d}d restantes", "#BA7517", "#FAEEDA", "#6B3E0A"
+    return     f"{d}d restantes", "#185FA5", "#E6F1FB", "#0C447C"
+
+# ── Painel de alertas de prazos ───────────────────────────────────────────────
+def _painel_alertas():
+    """
+    Exibe banner de prazos ativos no topo de qualquer página.
+    Agrupa em: Vencidos · Vence hoje / 7 dias · Próximos (até 30 dias).
+    Botão "✅ Concluir" remove o alerta sem apagar o registro.
+    """
+    prazos = db.get_prazos_ativos()
+    if not prazos:
+        return
+
+    criticos  = [p for p in prazos if int(p["dias_restantes"] or 0) <= 0]
+    urgentes  = [p for p in prazos if 0 < int(p["dias_restantes"] or 0) <= 7]
+    proximos  = [p for p in prazos if 7 < int(p["dias_restantes"] or 0) <= 30]
+
+    total = len(prazos)
+    resumo_parts = []
+    if criticos: resumo_parts.append(f"**{len(criticos)} vencido(s)**")
+    if urgentes: resumo_parts.append(f"**{len(urgentes)} urgente(s)**")
+    if proximos: resumo_parts.append(f"{len(proximos)} próximo(s)")
+
+    with st.expander(
+        f"🔔 {total} prazo(s) ativo(s) — " + " · ".join(resumo_parts),
+        expanded=bool(criticos or urgentes),
+    ):
+        for grupo, label_grupo in [
+            (criticos, "🔴 Vencidos / Vencem hoje"),
+            (urgentes, "🟠 Vencem em até 7 dias"),
+            (proximos, "🔵 Próximos (até 30 dias)"),
+        ]:
+            if not grupo:
+                continue
+            st.markdown(f"**{label_grupo}**")
+            for p in grupo:
+                lbl, cor_b, cor_f, cor_t = _urgencia(p["dias_restantes"])
+                col_info, col_btn = st.columns([6, 1])
+                with col_info:
+                    st.markdown(
+                        f"""<div style="border-left:4px solid {cor_b};background:{cor_f};
+                            border-radius:4px;padding:8px 12px;margin:4px 0;font-size:13px">
+                            <span style="color:{cor_t};font-weight:500">{lbl}</span>
+                            &nbsp;·&nbsp;
+                            <b>{p['nome_municipio']}</b>
+                            &nbsp;·&nbsp; {p['assunto']}
+                            &nbsp;·&nbsp;
+                            <span style="color:{cor_t}">prazo: {str(p['data_prazo'])[:10]}</span>
+                        </div>""",
+                        unsafe_allow_html=True,
+                    )
+                with col_btn:
+                    if st.button("✅ Concluir", key=f"concluir_{p['id']}",
+                                 help="Marcar prazo como concluído e remover alerta"):
+                        db.concluir_prazo(p["id"])
+                        st.rerun()
+            st.divider()
+
 
 # ── Sidebar com menu agrupado (MVP 2) ─────────────────────────────────────────
 with st.sidebar:
@@ -115,6 +181,9 @@ with st.sidebar:
     if st.button("🚪 Sair", use_container_width=True):
         auth.logout()
 
+
+# ── Painel de alertas — aparece no topo de qualquer página ───────────────────
+_painel_alertas()
 
 # ═════════════════ DASHBOARD ═════════════════════════════════════════════════
 if active == "📊 Dashboard":
@@ -429,13 +498,24 @@ elif active == "📋 Histórico de Contatos":
                 resp    = fc5.text_input("Responsável (equipe DAP)")
                 assunto = fc6.text_input("Assunto *")
                 notas   = st.text_area("Notas", height=100)
+                # Campos de prazo
+                st.markdown("**Prazo**")
+                fp1, fp2 = st.columns(2)
+                tem_prazo_n = fp1.checkbox("Definir prazo para este registro")
+                data_prazo_n = fp2.date_input(
+                    "Data limite", value=date.today(),
+                    disabled=not tem_prazo_n, key="dp_novo")
                 cs, cc  = st.columns(2)
                 if cs.form_submit_button("💾 Salvar", type="primary", use_container_width=True):
                     if not assunto.strip():
                         st.error("Assunto obrigatório.")
                     else:
-                        db.add_historico(codigo_ibge, str(data_c), tipo_c,
-                                         nome_c, cargo_c, resp, assunto.strip(), notas)
+                        db.add_historico(
+                            codigo_ibge, str(data_c), tipo_c,
+                            nome_c, cargo_c, resp, assunto.strip(), notas,
+                            tem_prazo=tem_prazo_n,
+                            data_prazo=str(data_prazo_n) if tem_prazo_n else None,
+                        )
                         st.session_state["form_hist_aberto"] = False
                         st.success("✅ Salvo!"); st.rerun()
                 if cc.form_submit_button("✖ Cancelar", use_container_width=True):
@@ -462,6 +542,27 @@ elif active == "📋 Histórico de Contatos":
                         d2.write(f"**Cargo:** {r['cargo_contato'] or '-'}")
                         d3.write(f"**Resp.:** {r['responsavel'] or '-'}")
                         _notas_html(r["notas"])
+                        # Badge de prazo
+                        if r.get("tem_prazo") and r.get("data_prazo") and not r.get("prazo_ok"):
+                            dias = (date.fromisoformat(str(r["data_prazo"])[:10]) - date.today()).days
+                            lbl, cor_b, cor_f, cor_t = _urgencia(dias)
+                            st.markdown(
+                                f"""<div style="display:inline-block;border-left:4px solid {cor_b};
+                                    background:{cor_f};border-radius:4px;
+                                    padding:4px 10px;margin:4px 0;font-size:12px">
+                                    ⏰ <b style="color:{cor_t}">Prazo: {str(r['data_prazo'])[:10]}</b>
+                                    &nbsp;·&nbsp;
+                                    <span style="color:{cor_t}">{lbl}</span>
+                                </div>""",
+                                unsafe_allow_html=True,
+                            )
+                        elif r.get("prazo_ok"):
+                            st.markdown(
+                                '<div style="display:inline-block;background:#EAF3DE;'
+                                'border-left:4px solid #1D9E75;border-radius:4px;'
+                                'padding:4px 10px;font-size:12px;color:#3B6D11">'
+                                '✅ Prazo concluído</div>',
+                                unsafe_allow_html=True)
                         st.caption(f"Registrado em: {str(r['criado_em'])[:16]}")
                         col_e, col_d = st.columns(2)
                         if col_e.button("✏️ Editar",  key=f"btn_edit_{r['id']}"):
@@ -485,6 +586,20 @@ elif active == "📋 Histórico de Contatos":
                             novo_resp    = ef5.text_input("Responsável (equipe DAP)", value=r["responsavel"] or "")
                             novo_assunto = ef6.text_input("Assunto *",       value=r["assunto"] or "")
                             novas_notas  = st.text_area("Notas",             value=r["notas"] or "", height=100)
+                            # Campos de prazo na edição
+                            st.markdown("**Prazo**")
+                            ep1, ep2 = st.columns(2)
+                            novo_tem_prazo = ep1.checkbox(
+                                "Definir prazo", value=bool(r.get("tem_prazo")),
+                                key=f"ck_prazo_{r['id']}")
+                            prazo_default = (
+                                date.fromisoformat(str(r["data_prazo"])[:10])
+                                if r.get("data_prazo") else date.today()
+                            )
+                            nova_data_prazo = ep2.date_input(
+                                "Data limite", value=prazo_default,
+                                disabled=not novo_tem_prazo,
+                                key=f"dp_edit_{r['id']}")
                             cs,cc = st.columns(2)
                             salvar   = cs.form_submit_button("💾 Salvar alterações", type="primary",
                                                              use_container_width=True)
@@ -496,7 +611,10 @@ elif active == "📋 Histórico de Contatos":
                                     db.update_historico(
                                         r["id"], str(nova_data), novo_tipo,
                                         novo_nome, novo_cargo, novo_resp,
-                                        novo_assunto.strip(), novas_notas)
+                                        novo_assunto.strip(), novas_notas,
+                                        tem_prazo=novo_tem_prazo,
+                                        data_prazo=str(nova_data_prazo) if novo_tem_prazo else None,
+                                    )
                                     st.session_state[edit_key] = False
                                     st.success("✅ Atualizado!"); st.rerun()
                             if cancelar:
