@@ -234,6 +234,27 @@ def get_historico_recente(limit: int = 20) -> list:
             return cur.fetchall()
 
 
+def get_historico_paginado(pagina: int = 1, por_pagina: int = 10) -> tuple[list, int]:
+    """Retorna (registros da página, total de registros)."""
+    offset = (pagina - 1) * por_pagina
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT COUNT(*)
+                FROM historico h
+                JOIN municipios m ON h.codigo_ibge = m.codigo_ibge
+            """)
+            total = cur.fetchone()["count"]
+            cur.execute("""
+                SELECT h.*, m.nome AS nome_municipio
+                FROM historico h
+                JOIN municipios m ON h.codigo_ibge = m.codigo_ibge
+                ORDER BY h.data_contato DESC, h.criado_em DESC
+                LIMIT %s OFFSET %s
+            """, [por_pagina, offset])
+            return cur.fetchall(), total
+
+
 def add_historico(codigo_ibge, data_contato, tipo_contato,
                   nome_contato, cargo_contato, responsavel, assunto, notas):
     with get_db() as conn:
