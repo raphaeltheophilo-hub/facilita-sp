@@ -253,6 +253,25 @@ def delete_historico(id_registro: int):
             cur.execute("DELETE FROM historico WHERE id = %s", [id_registro])
 
 
+def update_historico(id_registro: int, data_contato: str, tipo_contato: str,
+                     nome_contato: str, cargo_contato: str, responsavel: str,
+                     assunto: str, notas: str):
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE historico SET
+                    data_contato  = %s,
+                    tipo_contato  = %s,
+                    nome_contato  = %s,
+                    cargo_contato = %s,
+                    responsavel   = %s,
+                    assunto       = %s,
+                    notas         = %s
+                WHERE id = %s
+            """, [data_contato, tipo_contato, nome_contato,
+                  cargo_contato, responsavel, assunto, notas, id_registro])
+
+
 # ── Documentos ────────────────────────────────────────────────────────────────
 
 def get_documentos(codigo_ibge: str) -> list:
