@@ -210,6 +210,77 @@ elif page == "📋 Histórico de Contatos":
     st.title("📋 Histórico de Contatos")
     municipios = db.get_municipios()
     if not municipios: st.warning("Importe a planilha primeiro."); st.stop()
+
+    # ── Painel: últimos registros de todos os municípios ──────────────────────
+    POR_PAGINA = 10
+    if "hist_pagina" not in st.session_state:
+        st.session_state["hist_pagina"] = 1
+
+    recentes, total_rec = db.get_historico_paginado(
+        pagina=st.session_state["hist_pagina"],
+        por_pagina=POR_PAGINA,
+    )
+    total_paginas = max(1, -(-total_rec // POR_PAGINA))
+
+    st.subheader("🕐 Registros recentes")
+    if total_rec == 0:
+        st.info("Nenhum contato registrado ainda.")
+    else:
+        st.caption(f"{total_rec} registro(s) no total — página {st.session_state['hist_pagina']} de {total_paginas}")
+        for r in recentes:
+            titulo = f"📍 **{r['nome_municipio']}** · {r['data_contato']} · {r['assunto']}"
+            with st.expander(titulo, expanded=False):
+                d1, d2, d3 = st.columns(3)
+                d1.write(f"**Município:** {r['nome_municipio']}")
+                d2.write(f"**Tipo:** {r['tipo_contato'] or '-'}")
+                d3.write(f"**Responsável:** {r['responsavel'] or '-'}")
+                d4, d5 = st.columns(2)
+                d4.write(f"**Contato:** {r['nome_contato'] or '-'}")
+                d5.write(f"**Cargo:** {r['cargo_contato'] or '-'}")
+                if r["notas"]:
+                    notas_html = (r["notas"]
+                                  .replace("&", "&amp;")
+                                  .replace("<", "&lt;")
+                                  .replace(">", "&gt;")
+                                  .replace("\n", "<br>"))
+                    st.markdown(
+                        f"""<div style="background:#f0f2f6;border-left:4px solid #185FA5;
+                            border-radius:4px;padding:10px 14px;margin:8px 0;
+                            font-size:14px;line-height:1.7;white-space:pre-wrap;
+                            word-break:break-word">{notas_html}</div>""",
+                        unsafe_allow_html=True,
+                    )
+                st.caption(f"Registrado em: {str(r['criado_em'])[:16]}")
+
+        # Paginação
+        if total_paginas > 1:
+            st.divider()
+            cols_pag = st.columns([1, 3, 1])
+            with cols_pag[0]:
+                if st.button("← Anterior", disabled=st.session_state["hist_pagina"] <= 1,
+                             use_container_width=True):
+                    st.session_state["hist_pagina"] -= 1
+                    st.rerun()
+            with cols_pag[1]:
+                paginas_visiveis = list(range(1, total_paginas + 1))
+                nova_pag = st.selectbox(
+                    "Página", paginas_visiveis,
+                    index=st.session_state["hist_pagina"] - 1,
+                    label_visibility="collapsed",
+                )
+                if nova_pag != st.session_state["hist_pagina"]:
+                    st.session_state["hist_pagina"] = nova_pag
+                    st.rerun()
+            with cols_pag[2]:
+                if st.button("Próxima →", disabled=st.session_state["hist_pagina"] >= total_paginas,
+                             use_container_width=True):
+                    st.session_state["hist_pagina"] += 1
+                    st.rerun()
+
+    st.divider()
+
+    # ── Registros por município ───────────────────────────────────────────────
+    st.subheader("📋 Registros por município")
     nomes = ["— Selecione —"] + [m["nome"] for m in municipios]
     default = 0
     if "nav_ibge" in st.session_state:
@@ -222,33 +293,34 @@ elif page == "📋 Histórico de Contatos":
     mun = next((m for m in municipios if m["nome"] == selected), None)
     if not mun: st.stop()
     codigo_ibge = mun["codigo_ibge"]
+
     with st.expander("➕ Registrar novo contato", expanded=False):
         with st.form("form_h", clear_on_submit=True):
             fc1,fc2 = st.columns(2)
-            data_c = fc1.date_input("Data", value=date.today())
-            tipo_c = fc2.selectbox("Tipo", utils.TIPOS_CONTATO)
+            data_c  = fc1.date_input("Data", value=date.today())
+            tipo_c  = fc2.selectbox("Tipo", utils.TIPOS_CONTATO)
             fc3,fc4 = st.columns(2)
-            nome_c = fc3.text_input("Nome do contato")
+            nome_c  = fc3.text_input("Nome do contato")
             cargo_c = fc4.text_input("Cargo")
             fc5,fc6 = st.columns(2)
-            resp   = fc5.text_input("Responsável (equipe DAP)")
+            resp    = fc5.text_input("Responsável (equipe DAP)")
             assunto = fc6.text_input("Assunto *")
-            notas = st.text_area("Notas", height=100)
+            notas   = st.text_area("Notas", height=100)
             if st.form_submit_button("💾 Salvar", type="primary"):
                 if not assunto.strip(): st.error("Assunto obrigatório.")
                 else:
                     db.add_historico(codigo_ibge, str(data_c), tipo_c,
                                      nome_c, cargo_c, resp, assunto.strip(), notas)
                     st.success("✅ Salvo!"); st.rerun()
+
     st.divider()
     registros = db.get_historico(codigo_ibge)
-    if not registros: st.info("Nenhum contato registrado.")
+    if not registros: st.info("Nenhum contato registrado para este município.")
     else:
         st.caption(f"{len(registros)} registro(s)")
         for r in registros:
             with st.expander(f"**{r['data_contato']}** · {r['tipo_contato']} · {r['assunto']}"):
 
-                # Modo visualização ou edição — controlado por session_state
                 edit_key = f"edit_mode_{r['id']}"
                 if edit_key not in st.session_state:
                     st.session_state[edit_key] = False
@@ -260,8 +332,11 @@ elif page == "📋 Histórico de Contatos":
                     d2.write(f"**Cargo:** {r['cargo_contato'] or '-'}")
                     d3.write(f"**Resp.:** {r['responsavel'] or '-'}")
                     if r["notas"]:
-                        # Preserva espaçamento e quebras de linha exatamente como o usuário digitou
-                        notas_html = r["notas"].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\n", "<br>")
+                        notas_html = (r["notas"]
+                                      .replace("&", "&amp;")
+                                      .replace("<", "&lt;")
+                                      .replace(">", "&gt;")
+                                      .replace("\n", "<br>"))
                         st.markdown(
                             f"""<div style="background:#f0f2f6;border-left:4px solid #185FA5;
                                 border-radius:4px;padding:10px 14px;margin:8px 0;
@@ -270,7 +345,6 @@ elif page == "📋 Histórico de Contatos":
                             unsafe_allow_html=True,
                         )
                     st.caption(f"Registrado em: {str(r['criado_em'])[:16]}")
-
                     col_edit, col_del = st.columns([1, 1])
                     if col_edit.button("✏️ Editar", key=f"btn_edit_{r['id']}"):
                         st.session_state[edit_key] = True
@@ -284,30 +358,28 @@ elif page == "📋 Histórico de Contatos":
                     st.markdown("**✏️ Editando registro**")
                     with st.form(f"form_edit_{r['id']}", clear_on_submit=False):
                         ef1, ef2 = st.columns(2)
-                        nova_data   = ef1.date_input("Data",
-                                        value=date.fromisoformat(str(r["data_contato"])[:10]))
-                        novo_tipo   = ef2.selectbox("Tipo", utils.TIPOS_CONTATO,
-                                        index=utils.TIPOS_CONTATO.index(r["tipo_contato"])
-                                              if r["tipo_contato"] in utils.TIPOS_CONTATO else 0)
+                        nova_data    = ef1.date_input("Data",
+                                         value=date.fromisoformat(str(r["data_contato"])[:10]))
+                        novo_tipo    = ef2.selectbox("Tipo", utils.TIPOS_CONTATO,
+                                         index=utils.TIPOS_CONTATO.index(r["tipo_contato"])
+                                               if r["tipo_contato"] in utils.TIPOS_CONTATO else 0)
                         ef3, ef4 = st.columns(2)
-                        novo_nome   = ef3.text_input("Nome do contato",
-                                        value=r["nome_contato"] or "")
-                        novo_cargo  = ef4.text_input("Cargo",
-                                        value=r["cargo_contato"] or "")
+                        novo_nome    = ef3.text_input("Nome do contato",
+                                         value=r["nome_contato"] or "")
+                        novo_cargo   = ef4.text_input("Cargo",
+                                         value=r["cargo_contato"] or "")
                         ef5, ef6 = st.columns(2)
-                        novo_resp   = ef5.text_input("Responsável (equipe DAP)",
-                                        value=r["responsavel"] or "")
+                        novo_resp    = ef5.text_input("Responsável (equipe DAP)",
+                                         value=r["responsavel"] or "")
                         novo_assunto = ef6.text_input("Assunto *",
-                                        value=r["assunto"] or "")
+                                         value=r["assunto"] or "")
                         novas_notas  = st.text_area("Notas",
-                                        value=r["notas"] or "", height=100)
-
+                                         value=r["notas"] or "", height=100)
                         cs, cc = st.columns(2)
-                        salvar    = cs.form_submit_button("💾 Salvar alterações", type="primary",
-                                                          use_container_width=True)
-                        cancelar  = cc.form_submit_button("✖ Cancelar",
-                                                          use_container_width=True)
-
+                        salvar   = cs.form_submit_button("💾 Salvar alterações", type="primary",
+                                                         use_container_width=True)
+                        cancelar = cc.form_submit_button("✖ Cancelar",
+                                                         use_container_width=True)
                         if salvar:
                             if not novo_assunto.strip():
                                 st.error("Assunto obrigatório.")
