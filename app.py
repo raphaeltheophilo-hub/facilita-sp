@@ -247,14 +247,82 @@ elif page == "📋 Histórico de Contatos":
         st.caption(f"{len(registros)} registro(s)")
         for r in registros:
             with st.expander(f"**{r['data_contato']}** · {r['tipo_contato']} · {r['assunto']}"):
-                d1,d2,d3 = st.columns(3)
-                d1.write(f"**Contato:** {r['nome_contato'] or '-'}")
-                d2.write(f"**Cargo:** {r['cargo_contato'] or '-'}")
-                d3.write(f"**Resp.:** {r['responsavel'] or '-'}")
-                if r["notas"]: st.info(r["notas"])
-                st.caption(f"Em: {str(r['criado_em'])[:16]}")
-                if st.button("🗑️ Excluir", key=f"dh_{r['id']}"):
-                    db.delete_historico(r["id"]); st.rerun()
+
+                # Modo visualização ou edição — controlado por session_state
+                edit_key = f"edit_mode_{r['id']}"
+                if edit_key not in st.session_state:
+                    st.session_state[edit_key] = False
+
+                if not st.session_state[edit_key]:
+                    # ── Modo leitura ──────────────────────────────────────────
+                    d1, d2, d3 = st.columns(3)
+                    d1.write(f"**Contato:** {r['nome_contato'] or '-'}")
+                    d2.write(f"**Cargo:** {r['cargo_contato'] or '-'}")
+                    d3.write(f"**Resp.:** {r['responsavel'] or '-'}")
+                    if r["notas"]:
+                        # Preserva espaçamento e quebras de linha exatamente como o usuário digitou
+                        notas_html = r["notas"].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\n", "<br>")
+                        st.markdown(
+                            f"""<div style="background:#f0f2f6;border-left:4px solid #185FA5;
+                                border-radius:4px;padding:10px 14px;margin:8px 0;
+                                font-size:14px;line-height:1.7;white-space:pre-wrap;
+                                word-break:break-word">{notas_html}</div>""",
+                            unsafe_allow_html=True,
+                        )
+                    st.caption(f"Registrado em: {str(r['criado_em'])[:16]}")
+
+                    col_edit, col_del = st.columns([1, 1])
+                    if col_edit.button("✏️ Editar", key=f"btn_edit_{r['id']}"):
+                        st.session_state[edit_key] = True
+                        st.rerun()
+                    if col_del.button("🗑️ Excluir", key=f"dh_{r['id']}"):
+                        db.delete_historico(r["id"])
+                        st.rerun()
+
+                else:
+                    # ── Modo edição ───────────────────────────────────────────
+                    st.markdown("**✏️ Editando registro**")
+                    with st.form(f"form_edit_{r['id']}", clear_on_submit=False):
+                        ef1, ef2 = st.columns(2)
+                        nova_data   = ef1.date_input("Data",
+                                        value=date.fromisoformat(str(r["data_contato"])[:10]))
+                        novo_tipo   = ef2.selectbox("Tipo", utils.TIPOS_CONTATO,
+                                        index=utils.TIPOS_CONTATO.index(r["tipo_contato"])
+                                              if r["tipo_contato"] in utils.TIPOS_CONTATO else 0)
+                        ef3, ef4 = st.columns(2)
+                        novo_nome   = ef3.text_input("Nome do contato",
+                                        value=r["nome_contato"] or "")
+                        novo_cargo  = ef4.text_input("Cargo",
+                                        value=r["cargo_contato"] or "")
+                        ef5, ef6 = st.columns(2)
+                        novo_resp   = ef5.text_input("Responsável (equipe DAP)",
+                                        value=r["responsavel"] or "")
+                        novo_assunto = ef6.text_input("Assunto *",
+                                        value=r["assunto"] or "")
+                        novas_notas  = st.text_area("Notas",
+                                        value=r["notas"] or "", height=100)
+
+                        cs, cc = st.columns(2)
+                        salvar    = cs.form_submit_button("💾 Salvar alterações", type="primary",
+                                                          use_container_width=True)
+                        cancelar  = cc.form_submit_button("✖ Cancelar",
+                                                          use_container_width=True)
+
+                        if salvar:
+                            if not novo_assunto.strip():
+                                st.error("Assunto obrigatório.")
+                            else:
+                                db.update_historico(
+                                    r["id"], str(nova_data), novo_tipo,
+                                    novo_nome, novo_cargo, novo_resp,
+                                    novo_assunto.strip(), novas_notas,
+                                )
+                                st.session_state[edit_key] = False
+                                st.success("✅ Registro atualizado!")
+                                st.rerun()
+                        if cancelar:
+                            st.session_state[edit_key] = False
+                            st.rerun()
 
 # ═════════════════ DOCUMENTOS ═════════════════════════════════════════════════
 elif page == "📁 Repositório de Documentos":
