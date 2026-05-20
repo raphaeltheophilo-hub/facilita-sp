@@ -112,6 +112,16 @@ def init_db():
             """, ["admin", "Administrador",
                   hashlib.sha256("facilita2025".encode()).hexdigest()])
 
+            # ── Migrações seguras (ADD COLUMN IF NOT EXISTS) ──────────────────
+            # Colunas de prazo adicionadas ao historico existente.
+            # ALTER TABLE ... ADD COLUMN IF NOT EXISTS não afeta dados já gravados.
+            for ddl in [
+                "ALTER TABLE historico ADD COLUMN IF NOT EXISTS tem_prazo     BOOLEAN DEFAULT FALSE",
+                "ALTER TABLE historico ADD COLUMN IF NOT EXISTS data_prazo    DATE",
+                "ALTER TABLE historico ADD COLUMN IF NOT EXISTS prazo_ok      BOOLEAN DEFAULT FALSE",
+            ]:
+                cur.execute(ddl)
+
 
 # ── Municípios ────────────────────────────────────────────────────────────────
 
@@ -256,16 +266,17 @@ def get_historico_paginado(pagina: int = 1, por_pagina: int = 10) -> tuple[list,
 
 
 def add_historico(codigo_ibge, data_contato, tipo_contato,
-                  nome_contato, cargo_contato, responsavel, assunto, notas):
+                  nome_contato, cargo_contato, responsavel, assunto, notas,
+                  tem_prazo=False, data_prazo=None):
     with get_db() as conn:
         with conn.cursor() as cur:
             cur.execute("""
                 INSERT INTO historico
                 (codigo_ibge, data_contato, tipo_contato, nome_contato,
-                 cargo_contato, responsavel, assunto, notas)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+                 cargo_contato, responsavel, assunto, notas, tem_prazo, data_prazo)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
             """, [codigo_ibge, data_contato, tipo_contato, nome_contato,
-                  cargo_contato, responsavel, assunto, notas])
+                  cargo_contato, responsavel, assunto, notas, tem_prazo, data_prazo])
 
 
 def delete_historico(id_registro: int):
@@ -276,7 +287,8 @@ def delete_historico(id_registro: int):
 
 def update_historico(id_registro: int, data_contato: str, tipo_contato: str,
                      nome_contato: str, cargo_contato: str, responsavel: str,
-                     assunto: str, notas: str):
+                     assunto: str, notas: str,
+                     tem_prazo: bool = False, data_prazo=None):
     with get_db() as conn:
         with conn.cursor() as cur:
             cur.execute("""
@@ -287,10 +299,42 @@ def update_historico(id_registro: int, data_contato: str, tipo_contato: str,
                     cargo_contato = %s,
                     responsavel   = %s,
                     assunto       = %s,
-                    notas         = %s
+                    notas         = %s,
+                    tem_prazo     = %s,
+                    data_prazo    = %s
                 WHERE id = %s
             """, [data_contato, tipo_contato, nome_contato,
-                  cargo_contato, responsavel, assunto, notas, id_registro])
+                  cargo_contato, responsavel, assunto, notas,
+                  tem_prazo, data_prazo, id_registro])
+
+
+def concluir_prazo(id_registro: int):
+    """Marca o prazo como concluído (remove o alerta sem apagar o registro)."""
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE historico SET prazo_ok = TRUE WHERE id = %s",
+                [id_registro])
+
+
+def get_prazos_ativos() -> list:
+    """
+    Retorna todos os registros com prazo ativo (tem_prazo=TRUE, prazo_ok=FALSE),
+    enriquecidos com nome do município e classificação de urgência.
+    """
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT h.*, m.nome AS nome_municipio,
+                       (h.data_prazo - CURRENT_DATE) AS dias_restantes
+                FROM historico h
+                JOIN municipios m ON h.codigo_ibge = m.codigo_ibge
+                WHERE h.tem_prazo = TRUE
+                  AND h.prazo_ok  = FALSE
+                  AND h.data_prazo IS NOT NULL
+                ORDER BY h.data_prazo ASC
+            """)
+            return cur.fetchall()
 
 
 # ── Documentos ────────────────────────────────────────────────────────────────
