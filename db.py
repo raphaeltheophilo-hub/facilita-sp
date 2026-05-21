@@ -265,6 +265,23 @@ def get_historico_paginado(pagina: int = 1, por_pagina: int = 10) -> tuple[list,
             return cur.fetchall(), total
 
 
+def get_historico_todos() -> list:
+    """Retorna todos os registros do histórico para exportação."""
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT h.id, m.nome AS nome_municipio, h.data_contato,
+                       h.tipo_contato, h.assunto, h.nome_contato,
+                       h.cargo_contato, h.responsavel, h.notas,
+                       h.tem_prazo, h.data_prazo, h.prazo_ok,
+                       h.criado_em
+                FROM historico h
+                JOIN municipios m ON h.codigo_ibge = m.codigo_ibge
+                ORDER BY h.data_contato DESC, h.criado_em DESC
+            """)
+            return cur.fetchall()
+
+
 def add_historico(codigo_ibge, data_contato, tipo_contato,
                   nome_contato, cargo_contato, responsavel, assunto, notas,
                   tem_prazo=False, data_prazo=None):
