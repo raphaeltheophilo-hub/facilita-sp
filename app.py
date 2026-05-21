@@ -415,6 +415,8 @@ elif active == "📋 Histórico de Contatos":
         POR_PAGINA = 10
         if "hist_pagina" not in st.session_state:
             st.session_state["hist_pagina"] = 1
+        if "hist_selecionados" not in st.session_state:
+            st.session_state["hist_selecionados"] = set()
 
         recentes, total_rec = db.get_historico_paginado(
             pagina=st.session_state["hist_pagina"], por_pagina=POR_PAGINA)
@@ -423,23 +425,107 @@ elif active == "📋 Histórico de Contatos":
         if total_rec == 0:
             st.info("Nenhum contato registrado ainda.")
         else:
-            st.caption(
-                f"{total_rec} registro(s) — página "
-                f"{st.session_state['hist_pagina']} de {total_paginas}"
-            )
-            for r in recentes:
-                titulo = f"📍 **{r['nome_municipio']}** · {r['data_contato']} · {r['assunto']}"
-                with st.expander(titulo, expanded=False):
-                    d1,d2,d3 = st.columns(3)
-                    d1.write(f"**Município:** {r['nome_municipio']}")
-                    d2.write(f"**Tipo:** {r['tipo_contato'] or '-'}")
-                    d3.write(f"**Responsável:** {r['responsavel'] or '-'}")
-                    d4,d5 = st.columns(2)
-                    d4.write(f"**Contato:** {r['nome_contato'] or '-'}")
-                    d5.write(f"**Cargo:** {r['cargo_contato'] or '-'}")
-                    _notas_html(r["notas"])
-                    st.caption(f"Registrado em: {str(r['criado_em'])[:16]}")
+            # ── Barra de exportação ───────────────────────────────────────────
+            n_sel = len(st.session_state["hist_selecionados"])
+            with st.container():
+                ex1, ex2, ex3, ex4 = st.columns([3, 1, 1, 1])
+                with ex1:
+                    st.caption(
+                        f"{total_rec} registro(s) no total — "
+                        f"página {st.session_state['hist_pagina']} de {total_paginas}"
+                        + (f" · **{n_sel} selecionado(s)**" if n_sel else "")
+                    )
+                with ex2:
+                    # Selecionar / limpar todos
+                    if st.button(
+                        "☑ Todos" if n_sel < total_rec else "☐ Limpar",
+                        use_container_width=True,
+                        key="btn_sel_todos",
+                        help="Seleciona todos os registros para exportação"
+                    ):
+                        if n_sel < total_rec:
+                            todos = db.get_historico_todos()
+                            st.session_state["hist_selecionados"] = {r["id"] for r in todos}
+                        else:
+                            st.session_state["hist_selecionados"] = set()
+                        st.rerun()
 
+                # Exportar — só mostra se há selecionados
+                if n_sel > 0:
+                    todos_para_export = db.get_historico_todos()
+                    registros_export  = [r for r in todos_para_export
+                                         if r["id"] in st.session_state["hist_selecionados"]]
+                    with ex3:
+                        xlsx_bytes = utils.exportar_historico_excel(registros_export)
+                        st.download_button(
+                            f"⬇️ Excel ({n_sel})",
+                            xlsx_bytes,
+                            file_name="historico_contatos.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            use_container_width=True,
+                            help=f"Exportar {n_sel} registro(s) selecionado(s) para Excel",
+                        )
+                    with ex4:
+                        pdf_bytes = utils.exportar_historico_pdf(registros_export)
+                        st.download_button(
+                            f"⬇️ PDF ({n_sel})",
+                            pdf_bytes,
+                            file_name="historico_contatos.pdf",
+                            mime="application/pdf",
+                            use_container_width=True,
+                            help=f"Exportar {n_sel} registro(s) selecionado(s) para PDF",
+                        )
+
+            st.divider()
+
+            # ── Lista de registros com checkbox ───────────────────────────────
+            for r in recentes:
+                selecionado = r["id"] in st.session_state["hist_selecionados"]
+                col_chk, col_rec = st.columns([1, 11])
+
+                with col_chk:
+                    novo_val = st.checkbox(
+                        "", value=selecionado,
+                        key=f"chk_rec_{r['id']}",
+                        label_visibility="collapsed",
+                    )
+                    if novo_val != selecionado:
+                        if novo_val:
+                            st.session_state["hist_selecionados"].add(r["id"])
+                        else:
+                            st.session_state["hist_selecionados"].discard(r["id"])
+                        st.rerun()
+
+                with col_rec:
+                    titulo = (
+                        f"📍 **{r['nome_municipio']}** · "
+                        f"{r['data_contato']} · {r['assunto']}"
+                    )
+                    with st.expander(titulo, expanded=False):
+                        d1,d2,d3 = st.columns(3)
+                        d1.write(f"**Município:** {r['nome_municipio']}")
+                        d2.write(f"**Tipo:** {r['tipo_contato'] or '-'}")
+                        d3.write(f"**Responsável:** {r['responsavel'] or '-'}")
+                        d4,d5 = st.columns(2)
+                        d4.write(f"**Contato:** {r['nome_contato'] or '-'}")
+                        d5.write(f"**Cargo:** {r['cargo_contato'] or '-'}")
+                        _notas_html(r["notas"])
+                        # Badge de prazo
+                        if r.get("tem_prazo") and r.get("data_prazo") and not r.get("prazo_ok"):
+                            dias = (date.fromisoformat(str(r["data_prazo"])[:10]) - date.today()).days
+                            lbl, cor_b, cor_f, cor_t = _urgencia(dias)
+                            st.markdown(
+                                f"""<div style="display:inline-block;border-left:4px solid {cor_b};
+                                    background:{cor_f};border-radius:4px;
+                                    padding:4px 10px;margin:4px 0;font-size:12px">
+                                    ⏰ <b style="color:{cor_t}">Prazo: {str(r['data_prazo'])[:10]}</b>
+                                    &nbsp;·&nbsp;<span style="color:{cor_t}">{lbl}</span>
+                                </div>""",
+                                unsafe_allow_html=True,
+                            )
+                        st.caption(f"Registrado em: {str(r['criado_em'])[:16]}")
+
+            # ── Paginação ─────────────────────────────────────────────────────
             if total_paginas > 1:
                 st.divider()
                 cp1, cp2, cp3 = st.columns([1,3,1])
@@ -460,6 +546,7 @@ elif active == "📋 Histórico de Contatos":
                                  disabled=st.session_state["hist_pagina"] >= total_paginas,
                                  use_container_width=True):
                         st.session_state["hist_pagina"] += 1; st.rerun()
+
 
     # ── Aba Por município ─────────────────────────────────────────────────────
     with aba_mun:
