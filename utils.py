@@ -259,134 +259,293 @@ def import_interlocutores_from_bytes(file_bytes: bytes, filename: str) -> tuple[
 
 def exportar_historico_excel(registros: list) -> bytes:
     """
-    Gera um arquivo Excel (.xlsx) a partir de uma lista de registros do histórico.
-    Retorna os bytes prontos para st.download_button.
+    Gera Excel com registro completo por linha — notas sem truncamento,
+    formatação por seção com cabeçalho destacado.
     """
     import io as _io
-    colunas = [
-        ("nome_municipio", "Município"),
-        ("data_contato",   "Data do Contato"),
-        ("tipo_contato",   "Tipo"),
-        ("assunto",        "Assunto"),
-        ("nome_contato",   "Nome do Contato"),
-        ("cargo_contato",  "Cargo"),
-        ("responsavel",    "Responsável (DAP)"),
-        ("notas",          "Notas"),
-        ("data_prazo",     "Data Limite (Prazo)"),
-        ("prazo_ok",       "Prazo Concluído?"),
-        ("criado_em",      "Registrado em"),
-    ]
-    rows = []
-    for r in registros:
-        row = {}
-        for campo, label in colunas:
-            val = r[campo] if campo in r.keys() else ""
-            if campo == "prazo_ok":
-                val = "Sim" if val else "Não"
-            elif campo in ("data_prazo", "criado_em") and val:
-                val = str(val)[:10]
-            row[label] = val or ""
-        rows.append(row)
+    from openpyxl import Workbook
+    from openpyxl.styles import (Font, PatternFill, Alignment,
+                                  Border, Side, GradientFill)
+    from openpyxl.utils import get_column_letter
 
-    df = pd.DataFrame(rows, columns=[label for _, label in colunas])
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Histórico de Contatos"
+
+    AZUL_HEX  = "185FA5"
+    AZUL_CLR_HEX = "E6F1FB"
+    CINZA_HEX = "F0F2F6"
+    BORDA     = Side(style="thin", color="CCCCCC")
+
+    def borda_fina():
+        return Border(left=BORDA, right=BORDA, top=BORDA, bottom=BORDA)
+
+    def borda_bottom():
+        return Border(bottom=Side(style="medium", color="CCCCCC"))
+
+    # ── Cabeçalho do relatório ────────────────────────────────────────────────
+    from datetime import datetime as _dt
+    ws.merge_cells("A1:I1")
+    ws["A1"] = "Histórico de Contatos — Facilita SP"
+    ws["A1"].font      = Font(bold=True, size=14, color="FFFFFF")
+    ws["A1"].fill      = PatternFill("solid", fgColor=AZUL_HEX)
+    ws["A1"].alignment = Alignment(vertical="center", horizontal="left", indent=1)
+    ws.row_dimensions[1].height = 28
+
+    ws.merge_cells("A2:I2")
+    ws["A2"] = (f"Gerado em: {_dt.now().strftime('%d/%m/%Y %H:%M')}   |   "
+                f"{len(registros)} registro(s)")
+    ws["A2"].font      = Font(size=9, color="666666", italic=True)
+    ws["A2"].alignment = Alignment(vertical="center", horizontal="left", indent=1)
+    ws.row_dimensions[2].height = 16
+
+    linha = 3  # linha atual
+
+    for idx, r in enumerate(registros):
+        linha += 1  # linha separadora entre registros
+        cor_fundo = AZUL_CLR_HEX if idx % 2 == 0 else CINZA_HEX
+
+        # ── Linha de título do registro ───────────────────────────────────────
+        ws.merge_cells(f"A{linha}:I{linha}")
+        municipio = str(r["nome_municipio"] or "")
+        data      = str(r["data_contato"] or "")[:10]
+        assunto   = str(r["assunto"] or "")
+        ws[f"A{linha}"] = f"  {municipio}   ·   {data}   ·   {assunto}"
+        ws[f"A{linha}"].font      = Font(bold=True, size=11, color="FFFFFF")
+        ws[f"A{linha}"].fill      = PatternFill("solid", fgColor=AZUL_HEX)
+        ws[f"A{linha}"].alignment = Alignment(vertical="center")
+        ws.row_dimensions[linha].height = 20
+        linha += 1
+
+        # ── Campos em pares (label | valor | label | valor) ──────────────────
+        def _linha_par(label1, val1, label2, val2):
+            nonlocal linha
+            for col, txt, bold, cor in [
+                (1, label1, True,  AZUL_CLR_HEX),
+                (2, val1,   False, "FFFFFF"),
+                (5, label2, True,  AZUL_CLR_HEX),
+                (6, val2,   False, "FFFFFF"),
+            ]:
+                c = ws.cell(row=linha, column=col, value=str(txt or ""))
+                c.font      = Font(bold=bold, size=10,
+                                   color=AZUL_HEX if bold else "333333")
+                c.fill      = PatternFill("solid", fgColor=cor_fundo)
+                c.alignment = Alignment(vertical="center",
+                                        wrap_text=True, indent=1)
+                c.border    = borda_fina()
+            # merge das células de valor para dar espaço
+            ws.merge_cells(f"B{linha}:D{linha}")
+            ws.merge_cells(f"F{linha}:I{linha}")
+            ws.row_dimensions[linha].height = 16
+            linha += 1
+
+        _linha_par("Município",         r["nome_municipio"],
+                   "Tipo de Contato",   r["tipo_contato"])
+        _linha_par("Nome do Contato",   r["nome_contato"],
+                   "Cargo",             r["cargo_contato"])
+        _linha_par("Responsável (DAP)", r["responsavel"],
+                   "Registrado em",     str(r["criado_em"] or "")[:16])
+
+        # Prazo (só se houver)
+        if r.get("tem_prazo") and r.get("data_prazo"):
+            prazo_val = str(r["data_prazo"])[:10]
+            if r.get("prazo_ok"):
+                prazo_val += "  ✓ Concluído"
+            _linha_par("Data Limite (Prazo)", prazo_val, "", "")
+
+        # ── Notas completas ───────────────────────────────────────────────────
+        notas = str(r["notas"] or "").strip()
+        if notas:
+            # Rótulo
+            lbl = ws.cell(row=linha, column=1, value="Notas")
+            lbl.font      = Font(bold=True, size=10, color=AZUL_HEX)
+            lbl.fill      = PatternFill("solid", fgColor=AZUL_CLR_HEX)
+            lbl.alignment = Alignment(vertical="top", indent=1)
+            lbl.border    = borda_fina()
+
+            # Conteúdo da nota — sem limite de caracteres
+            ws.merge_cells(f"B{linha}:I{linha}")
+            cel = ws.cell(row=linha, column=2, value=notas)
+            cel.font      = Font(size=10, color="333333")
+            cel.fill      = PatternFill("solid", fgColor="FFFFFF")
+            cel.alignment = Alignment(vertical="top", wrap_text=True, indent=1)
+            cel.border    = borda_fina()
+
+            # Altura proporcional ao tamanho das notas
+            n_linhas_estimadas = max(2, notas.count("\n") + 1,
+                                     len(notas) // 90 + 1)
+            ws.row_dimensions[linha].height = min(n_linhas_estimadas * 15, 200)
+            linha += 1
+
+        # Linha separadora
+        for col in range(1, 10):
+            c = ws.cell(row=linha, column=col, value="")
+            c.border = borda_bottom()
+        ws.row_dimensions[linha].height = 6
+        linha += 1
+
+    # ── Largura das colunas ───────────────────────────────────────────────────
+    larguras = {1: 22, 2: 20, 3: 10, 4: 10, 5: 22, 6: 20, 7: 10, 8: 10, 9: 10}
+    for col, w in larguras.items():
+        ws.column_dimensions[get_column_letter(col)].width = w
+
+    ws.freeze_panes = "A3"
+
     buf = _io.BytesIO()
-    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-        df.to_excel(writer, index=False, sheet_name="Histórico de Contatos")
-        ws = writer.sheets["Histórico de Contatos"]
-        # Ajusta largura de colunas automaticamente
-        for col_cells in ws.columns:
-            max_len = max((len(str(c.value or "")) for c in col_cells), default=10)
-            ws.column_dimensions[col_cells[0].column_letter].width = min(max_len + 4, 60)
+    wb.save(buf)
     return buf.getvalue()
 
 
 def exportar_historico_pdf(registros: list) -> bytes:
     """
-    Gera relatório PDF do histórico de contatos.
-    Retorna os bytes prontos para st.download_button.
+    Gera PDF com uma ficha completa por registro — notas sem truncamento,
+    layout retrato A4, uma ficha por registro com todos os campos.
     """
     from datetime import datetime as _dt
 
-    pdf = _PDF(orientation="L", unit="mm", format="A4")  # paisagem para caber colunas
-    pdf.set_auto_page_break(auto=True, margin=12)
+    class _HistPDF(_PDF):
+        def header(self):
+            self.set_fill_color(*AZUL)
+            self.rect(0, 0, 210, 16, "F")
+            self.set_font("Helvetica", "B", 10)
+            self.set_text_color(*BRANCO)
+            self.set_xy(8, 3)
+            self.cell(130, 6, "FACILITA SP - Secretaria de Desenvolvimento Economico")
+            self.set_font("Helvetica", "", 8)
+            self.set_xy(148, 3)
+            self.cell(55, 6,
+                      f"Emitido: {_dt.now().strftime('%d/%m/%Y %H:%M')}",
+                      align="R")
+            self.set_text_color(*PRETO)
+            self.ln(14)
+
+        def footer(self):
+            self.set_y(-11)
+            self.set_font("Helvetica", "I", 7)
+            self.set_text_color(*CINZA)
+            self.cell(0, 5,
+                      f"Pag. {self.page_no()} - Historico de Contatos - Facilita SP",
+                      align="C")
+
+    pdf = _HistPDF(orientation="P", unit="mm", format="A4")
+    pdf.set_auto_page_break(auto=True, margin=14)
     pdf.add_page()
 
-    # Título
-    pdf.set_font("Helvetica", "B", 16)
+    # Título do relatório
+    pdf.set_font("Helvetica", "B", 15)
     pdf.set_text_color(*AZUL)
-    pdf.cell(0, 10, "Historico de Contatos - Facilita SP", ln=True)
-    pdf.set_font("Helvetica", "", 9)
+    pdf.cell(0, 9, "Historico de Contatos - Facilita SP", ln=True)
+    pdf.set_font("Helvetica", "", 8)
     pdf.set_text_color(*CINZA)
     pdf.cell(0, 5,
              f"Gerado em: {_dt.now().strftime('%d/%m/%Y %H:%M')}   |   "
              f"{len(registros)} registro(s)",
              ln=True)
     pdf.set_text_color(*PRETO)
-    pdf.ln(3)
+    pdf.ln(4)
 
-    # Cabeçalho da tabela
-    COLUNAS = [
-        ("Municipio",      50),
-        ("Data",           22),
-        ("Tipo",           30),
-        ("Assunto",        65),
-        ("Contato",        40),
-        ("Responsavel",    40),
-        ("Prazo",          22),
-    ]
-    pdf.set_fill_color(*AZUL)
-    pdf.set_text_color(*BRANCO)
-    pdf.set_font("Helvetica", "B", 8)
-    for label, w in COLUNAS:
-        pdf.cell(w, 7, label, border=1, fill=True, align="C")
-    pdf.ln()
-    pdf.set_text_color(*PRETO)
+    LARGURA = 190  # largura útil em mm
 
-    # Linhas
-    for i, r in enumerate(registros):
-        fill_color = CINZA_CLR if i % 2 == 0 else BRANCO
-        pdf.set_fill_color(*fill_color)
-        pdf.set_font("Helvetica", "", 8)
-
-        prazo_str = ""
-        if r.get("tem_prazo") and r.get("data_prazo"):
-            prazo_str = str(r["data_prazo"])[:10]
-            if r.get("prazo_ok"):
-                prazo_str = "OK"
-
-        valores = [
-            (str(r["nome_municipio"] or "")[:28],  50),
-            (str(r["data_contato"] or "")[:10],    22),
-            (str(r["tipo_contato"] or "")[:18],    30),
-            (str(r["assunto"] or "")[:38],         65),
-            (str(r["nome_contato"] or "")[:22],    40),
-            (str(r["responsavel"] or "")[:22],     40),
-            (prazo_str,                            22),
-        ]
-        for val, w in valores:
-            pdf.cell(w, 6, val, border="B", fill=True)
+    def _campo(label: str, valor: str, w_label=40, w_valor=None):
+        """Imprime um par label/valor em linha única."""
+        if w_valor is None:
+            w_valor = LARGURA - w_label
+        pdf.set_font("Helvetica", "B", 8)
+        pdf.set_fill_color(*AZUL_CLR)
+        pdf.set_text_color(*AZUL)
+        pdf.cell(w_label, 6, f"  {label}", fill=True, border="B")
+        pdf.set_font("Helvetica", "", 9)
+        pdf.set_fill_color(*BRANCO)
+        pdf.set_text_color(*PRETO)
+        pdf.cell(w_valor, 6, f"  {str(valor or '-')}", fill=True, border="B")
         pdf.ln()
 
-        # Notas (se houver) em linha expandida
-        if r.get("notas") and str(r["notas"]).strip():
-            notas_clean = str(r["notas"]).replace("\n", " ").strip()[:200]
-            pdf.set_fill_color(*fill_color)
-            pdf.set_font("Helvetica", "I", 7)
-            pdf.set_text_color(*CINZA)
-            pdf.cell(10, 5, "", fill=True)  # indent
-            pdf.cell(259, 5, f"Notas: {notas_clean}", fill=True, border="B")
-            pdf.set_text_color(*PRETO)
-            pdf.ln()
+    def _campo_duplo(l1, v1, l2, v2, w_label=40):
+        """Dois campos lado a lado na mesma linha."""
+        metade = LARGURA // 2
+        pdf.set_font("Helvetica", "B", 8)
+        pdf.set_fill_color(*AZUL_CLR)
+        pdf.set_text_color(*AZUL)
+        pdf.cell(w_label, 6, f"  {l1}", fill=True, border="B")
+        pdf.set_font("Helvetica", "", 9)
+        pdf.set_fill_color(*BRANCO)
+        pdf.set_text_color(*PRETO)
+        pdf.cell(metade - w_label, 6, f"  {str(v1 or '-')}", fill=True, border="B")
+        pdf.set_font("Helvetica", "B", 8)
+        pdf.set_fill_color(*AZUL_CLR)
+        pdf.set_text_color(*AZUL)
+        pdf.cell(w_label, 6, f"  {l2}", fill=True, border="B")
+        pdf.set_font("Helvetica", "", 9)
+        pdf.set_fill_color(*BRANCO)
+        pdf.set_text_color(*PRETO)
+        pdf.cell(metade - w_label, 6, f"  {str(v2 or '-')}", fill=True, border="B")
+        pdf.ln()
 
-        # Nova página se necessário (já tratado por set_auto_page_break, mas reforça cabeçalho)
-        if pdf.get_y() > 185:
+    def _notas_pdf(texto: str):
+        """Imprime o bloco de notas com quebra de linha automática — sem limite."""
+        if not texto or not texto.strip():
+            return
+        # Rótulo
+        pdf.set_font("Helvetica", "B", 8)
+        pdf.set_fill_color(*AZUL_CLR)
+        pdf.set_text_color(*AZUL)
+        pdf.cell(LARGURA, 6, "  Notas", fill=True, border="B")
+        pdf.ln()
+        # Conteúdo com multi_cell para quebra automática de linha
+        pdf.set_font("Helvetica", "", 9)
+        pdf.set_fill_color(250, 250, 252)
+        pdf.set_text_color(*PRETO)
+        pdf.set_x(pdf.l_margin)
+        pdf.multi_cell(
+            LARGURA, 5, texto.strip(),
+            border=0, fill=True, align="L",
+        )
+
+    for idx, r in enumerate(registros):
+        # Verifica espaço — ficha mínima ocupa ~45mm; se não couber, nova página
+        if pdf.get_y() > 240:
             pdf.add_page()
-            pdf.set_fill_color(*AZUL)
-            pdf.set_text_color(*BRANCO)
-            pdf.set_font("Helvetica", "B", 8)
-            for label, w in COLUNAS:
-                pdf.cell(w, 7, label, border=1, fill=True, align="C")
-            pdf.ln()
-            pdf.set_text_color(*PRETO)
+
+        cor_barra = AZUL if idx % 2 == 0 else (30, 70, 130)
+
+        # ── Barra de título do registro ───────────────────────────────────────
+        pdf.set_fill_color(*cor_barra)
+        pdf.set_text_color(*BRANCO)
+        pdf.set_font("Helvetica", "B", 10)
+        municipio = str(r["nome_municipio"] or "")
+        data      = str(r["data_contato"] or "")[:10]
+        assunto   = str(r["assunto"] or "")
+        pdf.cell(LARGURA, 7,
+                 f"  {municipio}   |   {data}   |   {assunto}",
+                 fill=True)
+        pdf.set_text_color(*PRETO)
+        pdf.ln(8)
+
+        # ── Campos estruturados ───────────────────────────────────────────────
+        _campo_duplo("Tipo de Contato", r["tipo_contato"],
+                     "Responsavel (DAP)", r["responsavel"])
+        _campo_duplo("Nome do Contato",  r["nome_contato"],
+                     "Cargo",            r["cargo_contato"])
+        _campo_duplo("Registrado em",
+                     str(r["criado_em"] or "")[:16],
+                     "Data do Contato",   str(r["data_contato"] or "")[:10])
+
+        # Prazo
+        if r.get("tem_prazo") and r.get("data_prazo"):
+            prazo_val = str(r["data_prazo"])[:10]
+            status    = "Concluido" if r.get("prazo_ok") else "Em aberto"
+            _campo_duplo("Data Limite (Prazo)", prazo_val,
+                         "Status do Prazo", status)
+
+        # Notas completas (sem truncamento)
+        _notas_pdf(str(r["notas"] or ""))
+
+        # Espaçamento entre fichas
+        pdf.ln(5)
+        pdf.set_draw_color(180, 180, 180)
+        pdf.line(pdf.l_margin, pdf.get_y(),
+                 pdf.l_margin + LARGURA, pdf.get_y())
+        pdf.ln(4)
 
     return bytes(pdf.output())
+
