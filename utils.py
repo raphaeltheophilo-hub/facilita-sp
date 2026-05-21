@@ -253,3 +253,140 @@ def import_interlocutores_from_bytes(file_bytes: bytes, filename: str) -> tuple[
     except Exception as exc:
         db.log_importacao(filename, 0, "erro", str(exc))
         return False, f"Erro na importação: {exc}"
+
+
+# ── Exportação do Histórico de Contatos ───────────────────────────────────────
+
+def exportar_historico_excel(registros: list) -> bytes:
+    """
+    Gera um arquivo Excel (.xlsx) a partir de uma lista de registros do histórico.
+    Retorna os bytes prontos para st.download_button.
+    """
+    import io as _io
+    colunas = [
+        ("nome_municipio", "Município"),
+        ("data_contato",   "Data do Contato"),
+        ("tipo_contato",   "Tipo"),
+        ("assunto",        "Assunto"),
+        ("nome_contato",   "Nome do Contato"),
+        ("cargo_contato",  "Cargo"),
+        ("responsavel",    "Responsável (DAP)"),
+        ("notas",          "Notas"),
+        ("data_prazo",     "Data Limite (Prazo)"),
+        ("prazo_ok",       "Prazo Concluído?"),
+        ("criado_em",      "Registrado em"),
+    ]
+    rows = []
+    for r in registros:
+        row = {}
+        for campo, label in colunas:
+            val = r[campo] if campo in r.keys() else ""
+            if campo == "prazo_ok":
+                val = "Sim" if val else "Não"
+            elif campo in ("data_prazo", "criado_em") and val:
+                val = str(val)[:10]
+            row[label] = val or ""
+        rows.append(row)
+
+    df = pd.DataFrame(rows, columns=[label for _, label in colunas])
+    buf = _io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+        df.to_excel(writer, index=False, sheet_name="Histórico de Contatos")
+        ws = writer.sheets["Histórico de Contatos"]
+        # Ajusta largura de colunas automaticamente
+        for col_cells in ws.columns:
+            max_len = max((len(str(c.value or "")) for c in col_cells), default=10)
+            ws.column_dimensions[col_cells[0].column_letter].width = min(max_len + 4, 60)
+    return buf.getvalue()
+
+
+def exportar_historico_pdf(registros: list) -> bytes:
+    """
+    Gera relatório PDF do histórico de contatos.
+    Retorna os bytes prontos para st.download_button.
+    """
+    from datetime import datetime as _dt
+
+    pdf = _PDF(orientation="L", unit="mm", format="A4")  # paisagem para caber colunas
+    pdf.set_auto_page_break(auto=True, margin=12)
+    pdf.add_page()
+
+    # Título
+    pdf.set_font("Helvetica", "B", 16)
+    pdf.set_text_color(*AZUL)
+    pdf.cell(0, 10, "Historico de Contatos - Facilita SP", ln=True)
+    pdf.set_font("Helvetica", "", 9)
+    pdf.set_text_color(*CINZA)
+    pdf.cell(0, 5,
+             f"Gerado em: {_dt.now().strftime('%d/%m/%Y %H:%M')}   |   "
+             f"{len(registros)} registro(s)",
+             ln=True)
+    pdf.set_text_color(*PRETO)
+    pdf.ln(3)
+
+    # Cabeçalho da tabela
+    COLUNAS = [
+        ("Municipio",      50),
+        ("Data",           22),
+        ("Tipo",           30),
+        ("Assunto",        65),
+        ("Contato",        40),
+        ("Responsavel",    40),
+        ("Prazo",          22),
+    ]
+    pdf.set_fill_color(*AZUL)
+    pdf.set_text_color(*BRANCO)
+    pdf.set_font("Helvetica", "B", 8)
+    for label, w in COLUNAS:
+        pdf.cell(w, 7, label, border=1, fill=True, align="C")
+    pdf.ln()
+    pdf.set_text_color(*PRETO)
+
+    # Linhas
+    for i, r in enumerate(registros):
+        fill_color = CINZA_CLR if i % 2 == 0 else BRANCO
+        pdf.set_fill_color(*fill_color)
+        pdf.set_font("Helvetica", "", 8)
+
+        prazo_str = ""
+        if r.get("tem_prazo") and r.get("data_prazo"):
+            prazo_str = str(r["data_prazo"])[:10]
+            if r.get("prazo_ok"):
+                prazo_str = "OK"
+
+        valores = [
+            (str(r["nome_municipio"] or "")[:28],  50),
+            (str(r["data_contato"] or "")[:10],    22),
+            (str(r["tipo_contato"] or "")[:18],    30),
+            (str(r["assunto"] or "")[:38],         65),
+            (str(r["nome_contato"] or "")[:22],    40),
+            (str(r["responsavel"] or "")[:22],     40),
+            (prazo_str,                            22),
+        ]
+        for val, w in valores:
+            pdf.cell(w, 6, val, border="B", fill=True)
+        pdf.ln()
+
+        # Notas (se houver) em linha expandida
+        if r.get("notas") and str(r["notas"]).strip():
+            notas_clean = str(r["notas"]).replace("\n", " ").strip()[:200]
+            pdf.set_fill_color(*fill_color)
+            pdf.set_font("Helvetica", "I", 7)
+            pdf.set_text_color(*CINZA)
+            pdf.cell(10, 5, "", fill=True)  # indent
+            pdf.cell(259, 5, f"Notas: {notas_clean}", fill=True, border="B")
+            pdf.set_text_color(*PRETO)
+            pdf.ln()
+
+        # Nova página se necessário (já tratado por set_auto_page_break, mas reforça cabeçalho)
+        if pdf.get_y() > 185:
+            pdf.add_page()
+            pdf.set_fill_color(*AZUL)
+            pdf.set_text_color(*BRANCO)
+            pdf.set_font("Helvetica", "B", 8)
+            for label, w in COLUNAS:
+                pdf.cell(w, 7, label, border=1, fill=True, align="C")
+            pdf.ln()
+            pdf.set_text_color(*PRETO)
+
+    return bytes(pdf.output())
