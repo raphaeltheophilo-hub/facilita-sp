@@ -585,13 +585,16 @@ elif active == "📋 Histórico de Contatos":
                 resp    = fc5.text_input("Responsável (equipe DAP)")
                 assunto = fc6.text_input("Assunto *")
                 notas   = st.text_area("Notas", height=100)
-                # Campos de prazo
+                # Campos de prazo — data sempre visível (limitação do Streamlit
+                # dentro de forms: disabled não reage ao checkbox em tempo real)
                 st.markdown("**Prazo**")
                 fp1, fp2 = st.columns(2)
-                tem_prazo_n = fp1.checkbox("Definir prazo para este registro")
+                tem_prazo_n  = fp1.checkbox(
+                    "Definir prazo para este registro",
+                    help="Marque e escolha a data à direita")
                 data_prazo_n = fp2.date_input(
-                    "Data limite", value=date.today(),
-                    disabled=not tem_prazo_n, key="dp_novo")
+                    "Data limite *(preencha se marcou a caixinha)*",
+                    value=date.today(), key="dp_novo")
                 cs, cc  = st.columns(2)
                 if cs.form_submit_button("💾 Salvar", type="primary", use_container_width=True):
                     if not assunto.strip():
@@ -673,19 +676,21 @@ elif active == "📋 Histórico de Contatos":
                             novo_resp    = ef5.text_input("Responsável (equipe DAP)", value=r["responsavel"] or "")
                             novo_assunto = ef6.text_input("Assunto *",       value=r["assunto"] or "")
                             novas_notas  = st.text_area("Notas",             value=r["notas"] or "", height=100)
-                            # Campos de prazo na edição
+                            # Campos de prazo na edição — data sempre visível
                             st.markdown("**Prazo**")
                             ep1, ep2 = st.columns(2)
                             novo_tem_prazo = ep1.checkbox(
-                                "Definir prazo", value=bool(r.get("tem_prazo")),
+                                "Definir prazo",
+                                value=bool(r.get("tem_prazo")),
+                                help="Marque e escolha a data à direita",
                                 key=f"ck_prazo_{r['id']}")
                             prazo_default = (
                                 date.fromisoformat(str(r["data_prazo"])[:10])
                                 if r.get("data_prazo") else date.today()
                             )
                             nova_data_prazo = ep2.date_input(
-                                "Data limite", value=prazo_default,
-                                disabled=not novo_tem_prazo,
+                                "Data limite *(preencha se marcou a caixinha)*",
+                                value=prazo_default,
                                 key=f"dp_edit_{r['id']}")
                             cs,cc = st.columns(2)
                             salvar   = cs.form_submit_button("💾 Salvar alterações", type="primary",
